@@ -2529,4 +2529,4 @@ with gr.Blocks(title="i2u.ai — Unicolt Quiz") as demo:
     submit_btn.click(fn=final_submit, inputs=[saved_data, founder_name], outputs=[submit_status])
 
 if __name__ == "__main__":
-    demo.launch(theme=theme, css=CSS)
+    demo.launch(theme=theme, css=CSS, share=True)
