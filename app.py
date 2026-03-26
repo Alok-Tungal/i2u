@@ -1484,7 +1484,7 @@ st.markdown("""
 @st.cache_data
 def load_logo():
     try:
-        with open('WhatsApp Image 2026-03-19 at 2.43.33 PM.jpeg','rb') as _f:
+        with open('WhatsApp%20Image%202026-03-19%20at%202.43.33%20PM.jpeg','rb') as _f:
             b64 = base64.b64encode(_f.read()).decode()
     except FileNotFoundError:
         b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
