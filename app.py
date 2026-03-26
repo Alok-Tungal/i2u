@@ -1419,7 +1419,7 @@
 
 
 
-import gradio as gr
+import streamlit as st
 import pandas as pd
 import re
 import base64
@@ -1433,13 +1433,142 @@ import os
 from io import BytesIO
 from groq import Groq
 
+# ══════════════════════════════════════════════════════════════════
+#  SETUP & CONFIG
+# ══════════════════════════════════════════════════════════════════
+st.set_page_config(page_title="i2u.ai — Unicolt Quiz", layout="wide", initial_sidebar_state="expanded")
+
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 GROQ_MODEL  = "llama-3.3-70b-versatile"
 
+# CSS Injection for custom styling
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;900&family=Sora:wght@300;400;600&display=swap');
+    html, body, [class*="css"] {
+        font-family: 'Sora', sans-serif;
+    }
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Outfit', sans-serif !important;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 12px;
+        font-family: 'Outfit', sans-serif;
+        font-weight: bold;
+    }
+    .phase-card {
+        background: linear-gradient(170deg,#1e3a8a 0%,#1e40af 30%,#1a3fa8 65%,#0f2472 100%);
+        padding: 20px;
+        border-radius: 16px;
+        text-align: center;
+        color: white;
+        margin-bottom: 15px;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+        border: 1px solid #38a8f5;
+    }
+    .hitl-block {
+        border-left: 3px solid #f59e0b;
+        background: rgba(245,158,11,0.05);
+        border-radius: 0 12px 12px 0;
+        padding: 12px 16px;
+        margin-top: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
+
+# ══════════════════════════════════════════════════════════════════
+#  DATA LOADING & GLOBALS
+# ══════════════════════════════════════════════════════════════════
+@st.cache_data
+def load_logo():
+    try:
+        with open('WhatsApp Image 2026-03-19 at 2.43.33 PM.jpeg','rb') as _f:
+            b64 = base64.b64encode(_f.read()).decode()
+    except FileNotFoundError:
+        b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    return f"data:image/jpeg;base64,{b64}"
+
+LOGO_SRC = load_logo()
+
+FOCUS_LABELS = ["Resilience","Validation","Feasibility","Traction","Growth",
+                "Profit","Innovation","Legacy","Stewardship"]
+VIBGYOR = ["#FF0000","#FF7F00","#FFFF00","#00C800","#0000FF","#4B0082","#8B00FF","#00FFFF","#FF00FF"]
+
+PHASE_META = {
+    "conception":{"emoji":"✨"},"spark":{"emoji":"✨"},
+    "initiation":{"emoji":"🎯"},"hunt":{"emoji":"🎯"},
+    "formulation":{"emoji":"🔨"},"build":{"emoji":"🔨"},
+    "market entry":{"emoji":"🚀"},"launch":{"emoji":"🚀"},
+    "scaling":{"emoji":"📈"},"rocket":{"emoji":"📈"},
+    "efficiency":{"emoji":"⚙️"},"optimization":{"emoji":"⚙️"},
+    "leadership":{"emoji":"🏛️"},"institution":{"emoji":"🏛️"},
+    "unicorn":{"emoji":"🦄"},"dominance":{"emoji":"🦄"},
+    "masters":{"emoji":"⭐"},"jedi":{"emoji":"⭐"},"return":{"emoji":"⭐"},
+}
+
+def prettify_name(text):
+    text = str(text).replace("_"," ").replace("-"," ")
+    return re.sub(r'\s+',' ',text).strip().title()
+
+def get_emoji(name):
+    lower = name.lower()
+    for k,v in PHASE_META.items():
+        if k in lower: return v["emoji"]
+    return "📂"
+
+@st.cache_data
+def load_excel_data():
+    excel_data, score_data, phase_focus_map = {}, {}, {}
+    clean_phases, pretty_phases_list, ui_to_raw_map = [], [], {}
+    
+    try:
+        df = pd.read_excel("Refined_Startup_Assessment_Questions.xlsx")
+        df.columns = df.columns.str.strip()
+        phase_col    = next((c for c in df.columns if c.lower() in ['level','phase','stage','phases']), df.columns[0])
+        question_col = next((c for c in df.columns if c.lower() in ['question','questions','criteria','description']), df.columns[-1])
+        score_col    = next((c for c in df.columns if c.lower() in ['base_score','score','base score']), None)
+        df = df.dropna(subset=[phase_col, question_col])
+        df = df[df[phase_col].astype(str).str.lower() != 'level name']
+        raw_phases         = df[phase_col].astype(str).unique().tolist()
+        ui_to_raw_map      = {prettify_name(p): p for p in raw_phases}
+        pretty_phases_list = list(ui_to_raw_map.keys())
+        excel_data         = df.groupby(phase_col)[question_col].apply(lambda x:[str(q) for q in x]).to_dict()
+        if score_col:
+            score_data = df.groupby(phase_col)[score_col].apply(lambda x:[float(v) for v in x]).to_dict()
+            
+        clean_phases = [p for p in pretty_phases_list if p.lower() not in ["level name","error"]]
+        
+        _focus_col = next((c for c in df.columns if c.lower()=='focus'), None)
+        if _focus_col:
+            _pf = df.groupby(phase_col)[_focus_col].first().to_dict()
+            for pretty, raw in ui_to_raw_map.items():
+                if raw in _pf:
+                    phase_focus_map[pretty] = str(_pf[raw]).strip()
+    except Exception as e:
+        clean_phases = ["Error"]
+        excel_data = {"Error":[f"Could not load: {e}"]}
+        
+    return excel_data, score_data, phase_focus_map, clean_phases, ui_to_raw_map
+
+excel_data, score_data, phase_focus_map, clean_phases, ui_to_raw_map = load_excel_data()
+
+def get_focus_for_phase(phase_name): return phase_focus_map.get(phase_name, "Resilience")
+def get_all_qs(phase): return excel_data.get(ui_to_raw_map.get(phase,""),[])[:18]
+def get_dim_qs(phase): return get_all_qs(phase)[:9]
+def get_eir_qs(phase): return get_all_qs(phase)[9:18]
+
+def q_label(idx, phase_focus="Resilience"):
+    if idx < 9: return f"D{idx+1}", phase_focus
+    else:        return f"EITR{idx-8}", phase_focus
+
+
+# ══════════════════════════════════════════════════════════════════
+#  LLM FUNCTIONS
+# ══════════════════════════════════════════════════════════════════
 def llm_evaluate_answer(phase_name, focus, label, question_text, user_answer):
-    if not user_answer or not user_answer.strip():
-        return ""
+    if not user_answer or not user_answer.strip(): return ""
     prompt = f"""You are an expert startup mentor evaluating a founder's answer.
 Phase: {phase_name}, Focus: {focus}, Question: [{label}] {question_text}
 Founder's Answer: {user_answer}
@@ -1450,35 +1579,14 @@ STRENGTH: (one key strength)
 GAP: (one area to improve)
 Under 100 words."""
     try:
-        r = groq_client.chat.completions.create(model=GROQ_MODEL,
-            messages=[{"role":"user","content":prompt}], temperature=0.3)
+        r = groq_client.chat.completions.create(model=GROQ_MODEL, messages=[{"role":"user","content":prompt}], temperature=0.3)
         return r.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ AI Mentor unavailable: {e}"
-
+    except Exception as e: return f"⚠️ AI Mentor unavailable: {e}"
 
 def parse_ai_score(text):
     if not text: return None
     m = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)\s*/\s*10', text, re.IGNORECASE)
     return round(min(float(m.group(1)), 10.0) / 10.0, 2) if m else None
-
-
-def llm_phase_report(phase_name, focus, all_qa_pairs):
-    qa_text = "\n".join([f"Q{i+1}: {q}\nA: {a if a.strip() else '[SKIPPED]'}"
-                         for i,(q,a) in enumerate(all_qa_pairs)])
-    prompt = f"""Senior startup mentor writing phase assessment.
-Phase: {phase_name}, Focus: {focus}
-{qa_text}
-Write with sections: ## {phase_name} — {focus} Assessment
-**Overall Score: X/10** **Executive Summary** **Key Strengths** **Critical Gaps**
-**Elephants in the Room** **Mentor Recommendation**. Under 300 words."""
-    try:
-        r = groq_client.chat.completions.create(model=GROQ_MODEL,
-            messages=[{"role":"user","content":prompt}], temperature=0.4)
-        return r.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ AI Mentor unavailable: {e}"
-
 
 def llm_hitl_report(all_data, founder_name):
     phases_summary = []
@@ -1495,320 +1603,32 @@ Founder: {founder_name or 'The Founder'}
 HITL Report sections: Executive Overview, Unicorn Potential Score X/100,
 Phase-by-Phase Analysis, Top 3 Strengths, Top 3 Risks, 90-Day Action Plan, Mentor's Verdict. Under 500 words."""
     try:
-        r = groq_client.chat.completions.create(model=GROQ_MODEL,
-            messages=[{"role":"user","content":prompt}], temperature=0.5)
+        r = groq_client.chat.completions.create(model=GROQ_MODEL, messages=[{"role":"user","content":prompt}], temperature=0.5)
         return r.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ AI Mentor unavailable: {e}"
-
-
-try:
-    with open('WhatsApp Image 2026-03-19 at 2.43.33 PM.jpeg','rb') as _f:
-        LOGO_B64 = base64.b64encode(_f.read()).decode()
-except FileNotFoundError:
-    LOGO_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-LOGO_SRC = f"data:image/jpeg;base64,{LOGO_B64}"
-
-FOCUS_LABELS = ["Resilience","Validation","Feasibility","Traction","Growth",
-                "Profit","Innovation","Legacy","Stewardship"]
-phase_focus_map = {}
-score_data      = {}
-VIBGYOR = ["#FF0000","#FF7F00","#FFFF00","#00C800","#0000FF",
-           "#4B0082","#8B00FF","#00FFFF","#FF00FF"]
-
-CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;900&family=Sora:wght@300;400;600&display=swap');
-:root {
-    --bg: #07081a;
-    --card: #0d1035;
-    --gold: #f59e0b;
-    --violet: #6d28d9;
-    --text: #e2e8f0;
-    --dim: #64748b;
-    --glass: rgba(13, 16, 53, 0.85);
-}
-.gradio-container { max-width: 100% !important; }
-footer, .footer, div[class*="footer"], #footer { display: none !important; }
-body, .gradio-container {
-    background: var(--bg) !important;
-    font-family: 'Sora', sans-serif !important;
-    color: var(--text) !important;
-}
-h1, h2, h3, h4 { font-family: 'Outfit', sans-serif !important; }
-.c, .c * { text-align: center !important; }
-
-/* Sticky Scorecard */
-.sticky-score-container {
-    position: fixed !important;
-    top: 20px !important;
-    right: 20px !important;
-    width: 320px !important;
-    z-index: 1000 !important;
-    max-height: 85vh !important;
-    overflow-y: auto !important;
-    background: var(--glass) !important;
-    backdrop-filter: blur(12px) !important;
-    border: 1px solid rgba(109, 40, 217, 0.4) !important;
-    border-radius: 16px !important;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.6), 0 0 20px rgba(109, 40, 217, 0.2) !important;
-    padding: 12px !important;
-    scrollbar-width: thin;
-    scrollbar-color: var(--violet) transparent;
-}
-.sticky-score-container::-webkit-scrollbar { width: 6px; }
-.sticky-score-container::-webkit-scrollbar-thumb { background: var(--violet); border-radius: 10px; }
-
-/* Dashboard Grid */
-.dashboard-grid {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 20px !important;
-    width: 100% !important;
-}
-@media (max-width: 1024px) {
-    .dashboard-grid { grid-template-columns: 1fr !important; }
-}
-
-.phase-header-title {
-    font-family: 'Outfit', sans-serif !important;
-    font-weight: 900 !important;
-    font-size: 1.8em !important;
-    color: var(--gold) !important;
-    text-align: center !important;
-    margin: 15px 0 !important;
-    letter-spacing: 1px !important;
-}
-
-input, textarea, select {
-    background: #0a0c25 !important;
-    border: 1px solid rgba(109,40,217,0.40) !important;
-    border-radius: 12px !important;
-    color: var(--text) !important;
-    font-family: 'Sora', sans-serif !important;
-}
-input:focus, textarea:focus {
-    border-color: var(--gold) !important;
-    box-shadow: 0 0 0 3px rgba(245,158,11,0.15) !important;
-    outline: none !important;
-}
-label span {
-    font-family: 'Outfit', sans-serif !important;
-    font-weight: 700 !important;
-    color: #c4b5fd !important;
-}
-.logo-header {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
-    padding: 18px 20px 14px !important;
-    background: linear-gradient(180deg, rgba(13,16,53,0.98) 0%, rgba(7,8,26,0.85) 100%) !important;
-    border-bottom: 1px solid rgba(109,40,217,0.28) !important;
-    margin-bottom: 8px !important;
-    text-align: center !important;
-    width: 100% !important;
-    box-sizing: border-box !important;
-    overflow: hidden !important;
-}
-.logo-header img {
-    width: 72px !important; height: 72px !important;
-    max-width: 72px !important; max-height: 72px !important;
-    border-radius: 18px !important; object-fit: cover !important;
-    box-shadow: 0 4px 16px rgba(109,40,217,0.60), 0 0 0 2px rgba(245,158,11,0.45) !important;
-    margin: 0 auto 10px auto !important; display: block !important;
-}
-.logo-header .brand-name {
-    font-family: 'Outfit', sans-serif !important;
-    font-size: 1.8em !important; font-weight: 900 !important;
-    background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 45%, #8b5cf6 100%) !important;
-    -webkit-background-clip: text !important; -webkit-text-fill-color: transparent !important;
-    background-clip: text !important; letter-spacing: 2px !important;
-}
-.logo-header .tagline {
-    font-family: 'Sora', sans-serif !important; font-size: 0.85em !important;
-    font-weight: 300 !important; color: #94a3b8 !important; letter-spacing: 1.2px !important; margin-top: 3px !important;
-}
-.question-title {
-    text-align: center !important; font-family: 'Outfit', sans-serif !important;
-    font-weight: 900 !important; font-size: 1.45em !important; color: #f59e0b !important;
-    letter-spacing: 1.5px !important; margin-bottom: 6px !important; padding: 10px 0 4px 0 !important;
-}
-.question-title * { text-align: center !important; color: #f59e0b !important; }
-.question-display {
-    background: rgba(109,40,217,0.12) !important;
-    border: 1.5px solid rgba(109,40,217,0.35) !important;
-    border-radius: 14px !important; padding: 18px 20px !important; margin-bottom: 12px !important;
-}
-.question-display p, .question-display * {
-    font-size: 1.15em !important; font-weight: 700 !important;
-    font-family: 'Outfit', sans-serif !important; color: #f8fafc !important;
-    line-height: 1.75 !important; margin: 0 !important;
-}
-.response-box textarea {
-    min-height: 100px !important; max-height: 160px !important;
-    overflow-y: auto !important; font-size: 0.98em !important;
-    line-height: 1.7 !important; border-radius: 12px !important;
-    padding: 12px !important; resize: vertical !important;
-}
-.response-box label span { font-size: 0.70em !important; font-weight: 400 !important; color: var(--dim)!important; text-transform: uppercase !important; letter-spacing: 0.5px !important; }
-.eir-warning {
-    background: rgba(239,68,68,0.12) !important; border: 2px solid #ef4444 !important;
-    border-radius: 12px !important; padding: 14px 18px !important; margin-bottom: 12px !important;
-}
-.eir-warning p, .eir-warning * { color: #fca5a5 !important; font-weight: 600 !important; font-family: 'Outfit', sans-serif !important; font-size: 0.95em !important; margin: 0 !important; }
-.skip-warning {
-    background: rgba(245,158,11,0.10) !important; border: 2px solid #f59e0b !important;
-    border-radius: 12px !important; padding: 14px 18px !important; margin-bottom: 12px !important;
-}
-.skip-warning p, .skip-warning * { color: #fde68a !important; font-weight: 600 !important; font-family: 'Outfit', sans-serif !important; font-size: 0.95em !important; margin: 0 !important; }
-.save-st p {
-    padding: 12px 18px !important; border-radius: 12px !important;
-    background: rgba(34,197,94,0.10) !important; border-left: 4px solid #22c55e !important;
-    font-size: 0.92em !important; color: #86efac !important;
-}
-.phase-hd,.phase-hd * { text-align: center !important; font-family: 'Outfit', sans-serif !important; }
-.upload-compact .wrap,.upload-compact > div:first-child{padding:0!important;border:none!important;background:transparent!important;min-height:0!important;}
-.upload-compact button {
-    background: rgba(109,40,217,0.18) !important;
-    border: 1px solid rgba(109,40,217,0.45) !important;
-    border-radius: 10px !important; color: #c4b5fd !important;
-    font-family: 'Outfit', sans-serif !important; font-weight: 700 !important;
-    padding: 12px 24px !important; width: 100% !important; cursor: pointer !important;
-}
-.upload-compact .dnd-zone, .upload-compact .dnd-zone-text, .upload-compact .or { display: none !important; }
-.footer-md, .footer-md * { text-align: center !important; color: var(--dim) !important; font-size: 0.82em !important; }
-.hitl-block {
-    border-left: 3px solid var(--gold) !important;
-    background: rgba(245,158,11,0.05) !important;
-    border-radius: 0 12px 12px 0 !important; padding: 12px 16px !important;
-}
-.cert-photo-box { border: 1.5px dashed rgba(245,158,11,0.45) !important; border-radius: 18px !important; background: rgba(245,158,11,0.04) !important; padding: 16px !important; }
-.phase-btn { position: relative !important; }
-.phase-btn button {
-    min-height: 130px !important; width: 100% !important;
-    border-radius: 22px !important; border: 1.5px solid rgba(56,168,245,0.45) !important;
-    outline: none !important; cursor: pointer !important;
-    overflow: hidden !important; position: relative !important;
-    font-family: 'Outfit', sans-serif !important; font-size: 0.95em !important; font-weight: 700 !important;
-    line-height: 1.5 !important; white-space: normal !important; text-align: center !important;
-    padding: 20px 16px !important; color: #ffffff !important;
-    text-shadow: 0 1px 6px rgba(0,0,0,0.55) !important;
-    background:
-        linear-gradient(180deg,rgba(255,255,255,0.32) 0%,rgba(255,255,255,0.10) 30%,transparent 55%,rgba(0,0,0,0.22) 100%),
-        linear-gradient(170deg,#1e3a8a 0%,#1e40af 30%,#1a3fa8 65%,#0f2472 100%) !important;
-    box-shadow: inset 0 4px 8px rgba(255,255,255,0.22), inset 0 -5px 10px rgba(0,0,0,0.50), 0 8px 0 #0a1a55, 0 14px 28px rgba(0,0,0,0.70) !important;
-    transition: transform 0.16s, box-shadow 0.16s !important;
-    display: flex !important; flex-direction: column !important;
-    align-items: center !important; justify-content: center !important;
-}
-.phase-btn button:hover {
-    transform: translateY(-8px) scale(1.03) !important;
-    box-shadow: inset 0 4px 10px rgba(255,255,255,0.38), 0 8px 0 #082a60,
-        0 20px 40px rgba(0,0,0,0.80), 0 0 28px rgba(56,168,245,0.70) !important;
-}
-.phase-btn button:active { transform: translateY(5px) scale(0.974) !important; filter: brightness(0.78) !important; }
-.hidden-btn { display: none !important; }
-"""
+    except Exception as e: return f"⚠️ AI Mentor unavailable: {e}"
 
 
 # ══════════════════════════════════════════════════════════════════
-#  DATA LOADING
+#  CHARTS & HTML GENERATORS (Adapted for Streamlit)
 # ══════════════════════════════════════════════════════════════════
-def prettify_name(text):
-    text = str(text).replace("_"," ").replace("-"," ")
-    return re.sub(r'\s+',' ',text).strip().title()
-
-PHASE_META = {
-    "conception":{"emoji":"✨"},"spark":{"emoji":"✨"},
-    "initiation":{"emoji":"🎯"},"hunt":{"emoji":"🎯"},
-    "formulation":{"emoji":"🔨"},"build":{"emoji":"🔨"},
-    "market entry":{"emoji":"🚀"},"launch":{"emoji":"🚀"},
-    "scaling":{"emoji":"📈"},"rocket":{"emoji":"📈"},
-    "efficiency":{"emoji":"⚙️"},"optimization":{"emoji":"⚙️"},
-    "leadership":{"emoji":"🏛️"},"institution":{"emoji":"🏛️"},
-    "unicorn":{"emoji":"🦄"},"dominance":{"emoji":"🦄"},
-    "masters":{"emoji":"⭐"},"jedi":{"emoji":"⭐"},"return":{"emoji":"⭐"},
-}
-
-def get_emoji(name):
-    lower = name.lower()
-    for k,v in PHASE_META.items():
-        if k in lower: return v["emoji"]
-    return "📂"
-
-try:
-    df = pd.read_excel("Refined_Startup_Assessment_Questions.xlsx")
-    df.columns = df.columns.str.strip()
-    phase_col    = next((c for c in df.columns if c.lower() in ['level','phase','stage','phases']), df.columns[0])
-    question_col = next((c for c in df.columns if c.lower() in ['question','questions','criteria','description']), df.columns[-1])
-    score_col    = next((c for c in df.columns if c.lower() in ['base_score','score','base score']), None)
-    df = df.dropna(subset=[phase_col, question_col])
-    df = df[df[phase_col].astype(str).str.lower() != 'level name']
-    raw_phases         = df[phase_col].astype(str).unique().tolist()
-    ui_to_raw_map      = {prettify_name(p): p for p in raw_phases}
-    pretty_phases_list = list(ui_to_raw_map.keys())
-    excel_data         = df.groupby(phase_col)[question_col].apply(lambda x:[str(q) for q in x]).to_dict()
-    if score_col:
-        score_data = df.groupby(phase_col)[score_col].apply(lambda x:[float(v) for v in x]).to_dict()
-except Exception as e:
-    pretty_phases_list = ["Error"]
-    ui_to_raw_map      = {"Error":"Error"}
-    excel_data         = {"Error":[f"Could not load: {e}"]}
-
-clean_phases = [p for p in pretty_phases_list if p.lower() not in ["level name","error"]]
-
-try:
-    _focus_col = next((c for c in df.columns if c.lower()=='focus'), None)
-    if _focus_col:
-        _pf = df.groupby(phase_col)[_focus_col].first().to_dict()
-        for pretty, raw in ui_to_raw_map.items():
-            if raw in _pf:
-                phase_focus_map[pretty] = str(_pf[raw]).strip()
-except Exception:
-    pass
-
-def get_focus_for_phase(phase_name):
-    return phase_focus_map.get(phase_name, "Resilience")
-
-def get_all_qs(phase):
-    return excel_data.get(ui_to_raw_map.get(phase,""),[])[:18]
-def get_dim_qs(phase): return get_all_qs(phase)[:9]
-def get_eir_qs(phase): return get_all_qs(phase)[9:18]
-
-def q_label(idx, phase_focus="Resilience"):
-    if idx < 9: return f"D{idx+1}", phase_focus
-    else:        return f"EITR{idx-8}", phase_focus
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CHARTS
-# ══════════════════════════════════════════════════════════════════
-def _answered_values(qs, pd_):
-    vals = []
-    for q in qs:
-        vals.append(1.0 if (q in pd_ and pd_[q].get("response","").strip()) else 0.0)
-    while len(vals) < 9: vals.append(0.0)
-    return vals
-
 def _ai_score_values(qs, pd_):
     vals = []
     for q in qs:
         if q in pd_ and pd_[q].get("response","").strip():
             ai_s = pd_[q].get("ai_score")
             vals.append(float(ai_s) if ai_s is not None else 0.5)
-        else:
-            vals.append(0.0)
+        else: vals.append(0.0)
     while len(vals) < 9: vals.append(0.0)
     return vals
 
-def build_dim_radar(all_data, phase_name="", phase_num=1, current_q_idx=0):
+def build_dim_radar(all_data, phase_name="", phase_num=1):
     dim_qs = get_dim_qs(phase_name) if phase_name else []
     pd_    = all_data.get(phase_name, {}) if all_data and phase_name else {}
     values = _ai_score_values(dim_qs, pd_)
     N = 9
     start_angle = np.pi/2 - (2*np.pi/N)
     angles = np.linspace(start_angle, start_angle+2*np.pi, N, endpoint=False)
-    fig, ax = plt.subplots(figsize=(5.5,5.8))
+    fig, ax = plt.subplots(figsize=(4,4))
     fig.patch.set_facecolor("#07081a"); ax.set_facecolor("#07081a")
     ax.set_aspect("equal"); ax.axis("off")
     for r in [0.2,0.4,0.6,0.8,1.0]:
@@ -1823,29 +1643,26 @@ def build_dim_radar(all_data, phase_name="", phase_num=1, current_q_idx=0):
     ax.plot(dx+[dx[0]], dy+[dy[0]], color="#f59e0b", linewidth=2.0, zorder=3)
     for i in range(N):
         ax.plot([0,dx[i]],[0,dy[i]], color=VIBGYOR[i], linewidth=2.0, zorder=4)
-        if values[i] > 0:
-            ax.plot(dx[i], dy[i], marker='D', markersize=6, color=VIBGYOR[i], zorder=5)
+        if values[i] > 0: ax.plot(dx[i], dy[i], marker='D', markersize=4, color=VIBGYOR[i], zorder=5)
     for i,a in enumerate(angles):
         r_text=1.15; tx=r_text*np.cos(a); ty=r_text*np.sin(a)
         ha = "left" if tx>0.1 else "right" if tx<-0.1 else "center"
         va = "bottom" if ty>0.1 else "top" if ty<-0.1 else "center"
-        ax.text(tx,ty,f"D{i+1}",ha=ha,va=va,fontsize=9,color=VIBGYOR[i],fontweight="bold")
-    if all(v==0 for v in values):
-        ax.text(0,0,"Awaiting\nData",ha="center",va="center",fontsize=10,fontweight="bold",color="#f59e0b",zorder=12)
+        ax.text(tx,ty,f"D{i+1}",ha=ha,va=va,fontsize=8,color=VIBGYOR[i],fontweight="bold")
     cur_focus = get_focus_for_phase(phase_name) if phase_name else FOCUS_LABELS[0]
-    ax.set_title(f"Phase{phase_num}: {phase_name}\nFocus: {cur_focus}", fontsize=8.5, color="#f1f5f9", fontweight="bold", pad=20)
+    ax.set_title(f"Phase {phase_num}: {phase_name}\nFocus: {cur_focus}", fontsize=8, color="#f1f5f9", fontweight="bold", pad=15)
     ax.set_xlim(-1.35,1.35); ax.set_ylim(-1.35,1.35)
-    plt.tight_layout(pad=1.2)
+    plt.tight_layout(pad=1.0)
     return fig
 
-def build_eir_radar(all_data, phase_name="", phase_num=1, current_q_idx=0):
+def build_eir_radar(all_data, phase_name="", phase_num=1):
     eir_qs = get_eir_qs(phase_name) if phase_name else []
     pd_    = all_data.get(phase_name, {}) if all_data and phase_name else {}
     values = _ai_score_values(eir_qs, pd_)
     N=9; start_angle=np.pi/2-(2*np.pi/N)
     angles = np.linspace(start_angle, start_angle+2*np.pi, N, endpoint=False).tolist()
     bar_w = 2*np.pi/N*0.78
-    fig, ax = plt.subplots(figsize=(5.5,5.8), subplot_kw=dict(polar=True))
+    fig, ax = plt.subplots(figsize=(4,4), subplot_kw=dict(polar=True))
     fig.patch.set_facecolor("#07081a"); ax.set_facecolor("#0d1035")
     for i,(angle,val) in enumerate(zip(angles,values)):
         color=VIBGYOR[i]
@@ -1854,679 +1671,316 @@ def build_eir_radar(all_data, phase_name="", phase_num=1, current_q_idx=0):
     ax.set_ylim(0,1.22); ax.set_yticks([]); ax.set_xticks([])
     ax.spines["polar"].set_color("#ef4444")
     ax.grid(color="#1e2a4a",linewidth=0.4,linestyle="-",alpha=0.3)
-    label_r=1.28
     for i,angle in enumerate(angles):
         ha="left" if np.cos(angle)>0.1 else "right" if np.cos(angle)<-0.1 else "center"
-        ax.text(angle, label_r, f"EITR{i+1}", ha=ha, va="center", fontsize=7.5,
-                color=VIBGYOR[i], fontweight="bold", transform=ax.transData)
-    if all(v==0 for v in values):
-        ax.text(0,0,"Awaiting\nData",ha="center",va="center",fontsize=10,fontweight="bold",color="#fca5a5",zorder=12,transform=ax.transData)
+        ax.text(angle, 1.28, f"EITR{i+1}", ha=ha, va="center", fontsize=7, color=VIBGYOR[i], fontweight="bold")
     cur_focus = get_focus_for_phase(phase_name) if phase_name else FOCUS_LABELS[0]
-    ax.set_title(f"Phase{phase_num}: {phase_name}\nFocus: {cur_focus}", fontsize=8.5, color="#fca5a5", fontweight="bold", pad=28)
-    plt.tight_layout(pad=1.2)
+    ax.set_title(f"Phase {phase_num}: {phase_name}\nFocus: {cur_focus}", fontsize=8, color="#fca5a5", fontweight="bold", pad=20)
+    plt.tight_layout(pad=1.0)
     return fig
 
-
-# ══════════════════════════════════════════════════════════════════
-#  NEW: Per-phase detail table (D1-D9 rows + EITR1-EITR9 rows)
-#  Layout: Phase header row, Focus row, then question rows
-# ══════════════════════════════════════════════════════════════════
-def build_phase_detail_table(all_data, phase, is_sticky=False):
-    """Builds a detailed question-by-question table for a single phase."""
+def build_phase_detail_table(all_data, phase):
+    # Simplified version for Streamlit HTML component
     if not phase: return ""
-    dim_qs    = get_dim_qs(phase)
-    eir_qs    = get_eir_qs(phase)
-    pd_       = all_data.get(phase, {}) if all_data else {}
-    focus     = get_focus_for_phase(phase)
-    raw       = ui_to_raw_map.get(phase, "")
-    pnum      = clean_phases.index(phase)+1 if phase in clean_phases else 1
-    all_scores = score_data.get(raw, [])
-    dim_scores = all_scores[:9]
-    eir_scores = all_scores[9:18]
+    dim_qs = get_dim_qs(phase); eir_qs = get_eir_qs(phase)
+    pd_ = all_data.get(phase, {})
+    raw = ui_to_raw_map.get(phase, "")
+    all_scores = score_data.get(raw, []); dim_scores = all_scores[:9]; eir_scores = all_scores[9:18]
 
-    # Compact styling for sticky
-    fs_table = "9px" if is_sticky else "11px"
-    pad_cell = "4px 3px" if is_sticky else "8px 10px"
+    TH = "padding:6px; font-size:11px; text-align:center; color:#d1d5db; background:#2d1b69; border:1px solid rgba(109,40,217,0.35);"
+    def td(txt, color="#e2e8f0"): return f"<td style='padding:6px; font-size:11px; color:{color}; text-align:center; border:1px solid rgba(109,40,217,0.14);'>{txt}</td>"
 
-    TH = (f"font-family:Outfit,sans-serif;font-weight:700;font-size:{fs_table};"
-          f"padding:8px 6px;text-align:center;text-transform:uppercase;"
-          f"letter-spacing:0.4px;border:1px solid rgba(109,40,217,0.35);"
-          f"color:#d1d5db;background:#2d1b69;")
+    def make_rows(qs, scores, prefix):
+        rows = ""; total_sc = 0.0
+        for i, q in enumerate(qs):
+            code = f"{prefix}{i+1}"; bs = scores[i] if i < len(scores) else 0.1
+            if q in pd_:
+                resp = pd_[q].get("response","").strip()
+                if resp:
+                    ai_s = pd_[q].get("ai_score"); sc = (ai_s * bs if ai_s is not None else bs)
+                    total_sc += sc
+                    rows += f"<tr>{td(code, VIBGYOR[i])}{td('✅ Answered', '#86efac')}{td(f'{sc:.2f}', '#f59e0b')}</tr>"
+                else: rows += f"<tr>{td(code, VIBGYOR[i])}{td('⏭️ Skipped', '#fde68a')}{td('—')}</tr>"
+            else: rows += f"<tr>{td(code, VIBGYOR[i])}{td('❌ N/A', '#fca5a5')}{td('—')}</tr>"
+        return rows, total_sc
 
-    def td(txt, color="#e2e8f0", bold=False, align="center", bg=""):
-        fs_  = "font-weight:700;" if bold else ""
-        bgc = f"background:{bg};" if bg else ""
-        return (f"<td style='padding:{pad_cell};font-size:{fs_table};color:{color};{fs_}{bgc}"
-                f"border:1px solid rgba(109,40,217,0.14);text-align:{align};"
-                f"white-space:normal;word-break:break-word;'>{txt}</td>")
+    dim_rows, dim_sc = make_rows(dim_qs, dim_scores, "D")
+    eir_rows, eir_sc = make_rows(eir_qs, eir_scores, "EITR")
 
-    def qa_color(q):
-        return "#86efac" if "✅" in q else "#fde68a" if "⚠️" in q else "#fca5a5" if "⏭️" in q else "#94a3b8"
+    html = f"""
+    <div style='background:rgba(13,16,53,0.95); padding: 10px; border-radius:8px;'>
+        <h4 style="color:#fbbf24; text-align:center; margin-top:0;">📐 Dimensions</h4>
+        <table style="width:100%; border-collapse:collapse; margin-bottom: 10px;">
+            <tr><th style="{TH}">ID</th><th style="{TH}">Status</th><th style="{TH}">Score</th></tr>
+            {dim_rows}
+        </table>
+        <h4 style="color:#fca5a5; text-align:center;">🐘 Elephants In The Room</h4>
+        <table style="width:100%; border-collapse:collapse;">
+            <tr><th style="{TH}">ID</th><th style="{TH}">Status</th><th style="{TH}">Score</th></tr>
+            {eir_rows}
+        </table>
+        <div style='text-align:center; margin-top:10px; color:#f59e0b; font-weight:bold;'>Total Score: {dim_sc+eir_sc:.2f}</div>
+    </div>
+    """
+    return html
 
-    def assess_color(a):
-        return "#86efac" if "🟢" in a else "#fde68a" if "🟡" in a else "#f97316" if "🟠" in a else "#fca5a5"
-
-    def fmt_score(s):
-        if s == 0: return "—"
-        if s >= 1: return f"{s:.2f}"
-        return f"{s:.4f}"
-
-    # ── HEADER block ─────────────────────────────────────────────
-    header_html = f"""
-    <div style='background:rgba(109,40,217,0.15); border-radius:12px; padding:12px; margin-bottom:15px; border:1.5px solid rgba(109,40,217,0.4); text-align:center;'>
-      <div style='font-family:Outfit,sans-serif; font-weight:800; font-size:1.3em; color:#f59e0b;'>📊 Phase {pnum}: {phase}</div>
-      <div style='font-family:Sora,sans-serif; font-size:0.95em; color:#94a3b8; margin-top:4px;'>Focus: <span style='color:#fbbf24; font-weight:bold;'>{focus}</span></div>
-    </div>"""
-
-    # ── DIMENSIONS table ──────────────────────────────────────────
-    dim_rows_html = ""
-    dim_total_score = 0.0; dim_answered = 0
-    for i, q in enumerate(dim_qs):
-        code = f"D{i+1}"
-        row_bg = "#0a0d2e" if i % 2 == 0 else "rgba(109,40,217,0.07)"
-        if q in pd_:
-            resp = pd_[q].get("response","").strip()
-            if resp:
-                dim_answered += 1
-                ai_s = pd_[q].get("ai_score")
-                bs   = dim_scores[i] if i < len(dim_scores) else 0.1
-                sc   = (ai_s * bs if ai_s is not None else bs)
-                dim_total_score += sc
-                qa_st, grade, assess = "✅ Answered", fmt_score(sc), "🟢 Complete"
-            else: qa_st, grade, assess = "⏭️ Skipped", "—", "🟡 Skipped"
-        else: qa_st, grade, assess = "❌ N/A", "—", "🔴 N/A"
-
-        dim_rows_html += f"<tr style='background:{row_bg};'>{td(code,color=VIBGYOR[i],bold=True)}{td(qa_st,color=qa_color(qa_st))}{td(grade,color='#f59e0b',bold=True)}{td(assess,color=assess_color(assess))}</tr>"
-
-    dim_table = f"""
-    <div style='background:rgba(13,16,53,0.95);border:1px solid rgba(245,158,11,0.35);border-radius:12px;overflow:hidden;margin-bottom:15px;'>
-      <div style='background:#2d1b69;padding:10px;font-family:Outfit,sans-serif;font-weight:800;font-size:1em;color:#fbbf24;text-align:center;border-bottom:2px solid rgba(245,158,11,0.5);'>📐 Dimensions</div>
-      <table style='width:100%;border-collapse:collapse;table-layout:fixed;'>
-        <thead><tr><th style='{TH}'>ID</th><th style='{TH}'>Status</th><th style='{TH}'>Score</th><th style='{TH}'>Grade</th></tr></thead>
-        <tbody>{dim_rows_html}</tbody>
-      </table>
-    </div>"""
-
-    # ── EIR table ────────────────────────────────────────────────
-    eir_rows_html = ""
-    eir_total_score = 0.0; eir_answered = 0
-    for i, q in enumerate(eir_qs):
-        code = f"EITR{i+1}"
-        row_bg = "#0a0d2e" if i % 2 == 0 else "rgba(239,68,68,0.05)"
-        if q in pd_:
-            resp = pd_[q].get("response","").strip()
-            if resp:
-                eir_answered += 1
-                ai_s = pd_[q].get("ai_score")
-                bs   = eir_scores[i] if i < len(eir_scores) else 0.1
-                sc   = (ai_s * bs if ai_s is not None else bs)
-                eir_total_score += sc
-                qa_st, grade, assess = "✅ Answered", fmt_score(sc), "🟢 Complete"
-            else: qa_st, grade, assess = "⏭️ Skipped", "—", "🟡 Skipped"
-        else: qa_st, grade, assess = "❌ N/A", "—", "🔴 N/A"
-
-        eir_rows_html += f"<tr style='background:{row_bg};'>{td(code,color=VIBGYOR[i],bold=True)}{td(qa_st,color=qa_color(qa_st))}{td(grade,color='#f59e0b',bold=True)}{td(assess,color=assess_color(assess))}</tr>"
-
-    eir_table = f"""
-    <div style='background:rgba(13,16,53,0.95);border:1px solid rgba(239,68,68,0.35);border-radius:12px;overflow:hidden;margin-bottom:15px;'>
-      <div style='background:#2d1b69;padding:10px;font-family:Outfit,sans-serif;font-weight:800;font-size:1em;color:#fca5a5;text-align:center;border-bottom:2px solid rgba(239,68,68,0.55);'>🐘 Elephants In The Room</div>
-      <table style='width:100%;border-collapse:collapse;table-layout:fixed;'>
-        <thead><tr><th style='{TH}'>ID</th><th style='{TH}'>Status</th><th style='{TH}'>Score</th><th style='{TH}'>Grade</th></tr></thead>
-        <tbody>{eir_rows_html}</tbody>
-      </table>
-    </div>"""
-
-    total_score = dim_total_score + eir_total_score
-    summary = f"""
-    <div style='padding:12px;background:rgba(109,40,217,0.15);border-radius:10px;text-align:center;font-family:Sora,sans-serif;font-size:0.95em;border:1px solid rgba(109,40,217,0.2);'>
-      Total Answered: <b style='color:#86efac;'>{dim_answered + eir_answered}/18</b> &nbsp;|&nbsp; Phase Score: <b style='color:#f59e0b;'>{fmt_score(total_score)}</b>
-    </div>"""
-
-    if is_sticky:
-        return f"<div class='sticky-score-container'>{header_html}{dim_table}{eir_table}{summary}</div>"
-    else:
-        return f"<div class='dashboard-grid'>{dim_table}{eir_table}</div>{summary}"
-
-
-
-# ══════════════════════════════════════════════════════════════════
-#  OVERALL SCORECARD (summary across all phases)
-# ══════════════════════════════════════════════════════════════════
 def build_overall_metrics_html(all_data):
-    total_dim = total_eir = 0
-    total_dim_sc = total_eir_sc = 0.0
+    total_ans, total_score = 0, 0.0
     for phase in clean_phases:
-        dim_qs = get_dim_qs(phase); eir_qs = get_eir_qs(phase)
-        pd_    = all_data.get(phase,{}) if all_data else {}
-        raw    = ui_to_raw_map.get(phase,"")
-        all_sc = score_data.get(raw,[])
-        for i,q in enumerate(dim_qs):
+        qs = get_all_qs(phase); pd_ = all_data.get(phase, {})
+        raw = ui_to_raw_map.get(phase,""); all_sc = score_data.get(raw,[])
+        for i, q in enumerate(qs):
             if q in pd_ and pd_[q].get("response","").strip():
-                total_dim += 1
-                ai_s = pd_[q].get("ai_score"); bs = all_sc[i] if i<len(all_sc) else 0.1
-                total_dim_sc += (ai_s*bs if ai_s is not None else bs)
-        for i,q in enumerate(eir_qs):
-            j = i+9
-            if q in pd_ and pd_[q].get("response","").strip():
-                total_eir += 1
-                ai_s = pd_[q].get("ai_score"); bs = all_sc[j] if j<len(all_sc) else 0.1
-                total_eir_sc += (ai_s*bs if ai_s is not None else bs)
-    total_ans = total_dim + total_eir
+                total_ans += 1; ai_s = pd_[q].get("ai_score")
+                bs = all_sc[i] if i<len(all_sc) else 0.1
+                total_score += (ai_s*bs if ai_s is not None else bs)
+                
     total_max = len(clean_phases)*18
-    overall_grade = round((total_ans/total_max)*10,1) if total_max and total_ans>0 else 0.0
-    total_score = total_dim_sc + total_eir_sc
-
-    def fs(s):
-        if s==0: return "0.00"
-        if s>=1000: return f"{s:,.0f}"
-        if s>=1: return f"{s:.2f}"
-        return f"{s:.4f}"
+    grade = round((total_ans/total_max)*10,1) if total_max else 0.0
 
     return f"""
-<div style='display:flex;justify-content:space-around;align-items:center;
-     background:rgba(13,16,53,0.95);border:1px solid rgba(109,40,217,0.45);
-     border-radius:12px;padding:20px;margin-top:10px;'>
-  <div style='text-align:center;'>
-    <div style='font-family:Outfit,sans-serif;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;'>Overall Grade</div>
-    <div style='font-family:Sora,sans-serif;color:#f59e0b;font-size:2em;font-weight:700;'>{overall_grade}/10</div>
-  </div>
-  <div style='width:1px;height:50px;background:rgba(109,40,217,0.3);'></div>
-  <div style='text-align:center;'>
-    <div style='font-family:Outfit,sans-serif;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;'>Overall Score</div>
-    <div style='font-family:Sora,sans-serif;color:#f59e0b;font-size:2em;font-weight:700;'>{fs(total_score)}</div>
-  </div>
-  <div style='width:1px;height:50px;background:rgba(109,40,217,0.3);'></div>
-  <div style='text-align:center;'>
-    <div style='font-family:Outfit,sans-serif;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;'>Total DIM</div>
-    <div style='font-family:Sora,sans-serif;color:#86efac;font-size:2em;font-weight:700;'>{total_dim}<span style='font-size:0.4em;color:#64748b;'>/{len(clean_phases)*9}</span></div>
-  </div>
-  <div style='width:1px;height:50px;background:rgba(109,40,217,0.3);'></div>
-  <div style='text-align:center;'>
-    <div style='font-family:Outfit,sans-serif;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;'>Total EIR</div>
-    <div style='font-family:Sora,sans-serif;color:#fca5a5;font-size:2em;font-weight:700;'>{total_eir}<span style='font-size:0.4em;color:#64748b;'>/{len(clean_phases)*9}</span></div>
-  </div>
-</div>"""
+    <div style='display:flex;justify-content:space-around;background:#0d1035;border:1px solid #6d28d9;border-radius:12px;padding:20px;color:white;'>
+        <div style='text-align:center;'><h4>Overall Grade</h4><h2 style='color:#f59e0b;'>{grade}/10</h2></div>
+        <div style='text-align:center;'><h4>Overall Score</h4><h2 style='color:#f59e0b;'>{total_score:.2f}</h2></div>
+        <div style='text-align:center;'><h4>Questions Answered</h4><h2 style='color:#86efac;'>{total_ans}/{total_max}</h2></div>
+    </div>
+    """
 
-
-def build_scorecard(all_data, target_phase=None):
-    phases = [target_phase] if target_phase else clean_phases
-    phase_rows=[]; total_dim_all=0; total_eir_all=0; total_dim_sc=0.0; total_eir_sc=0.0
-    TH = ("font-family:Outfit,sans-serif;font-weight:700;font-size:9px;"
-          "padding:6px 4px;text-align:center;text-transform:uppercase;"
-          "letter-spacing:0.3px;border:1px solid rgba(109,40,217,0.35);"
-          "white-space:normal;color:#d1d5db;background:#2d1b69;")
-
-    def td(txt, color="#e2e8f0", bold=False, align="center"):
-        fs="font-weight:700;" if bold else ""
-        return (f"<td style='padding:5px 4px;font-size:10px;color:{color};{fs}"
-                f"border:1px solid rgba(109,40,217,0.14);text-align:{align};"
-                f"white-space:normal;word-break:break-word;'>{txt}</td>")
-
-    for phase in phases:
-        dim_qs=get_dim_qs(phase); eir_qs=get_eir_qs(phase)
-        pd_=all_data.get(phase,{}) if all_data else {}
-        focus=get_focus_for_phase(phase); raw=ui_to_raw_map.get(phase,"")
-        pnum=clean_phases.index(phase)+1 if phase in clean_phases else 1
-        all_sc=score_data.get(raw,[]); dim_sc=all_sc[:9]; eir_sc=all_sc[9:18]
-        base=dim_sc[0] if dim_sc else 0.1
-        dim_ans=0;dim_skip=0;dim_vis=0;dim_score=0.0
-        for i,q in enumerate(dim_qs):
-            if q in pd_:
-                dim_vis+=1
-                if pd_[q].get("response","").strip():
-                    dim_ans+=1; ai_s=pd_[q].get("ai_score"); bs=dim_sc[i] if i<len(dim_sc) else base
-                    dim_score+=(ai_s*bs if ai_s is not None else bs)
-                else: dim_skip+=1
-        eir_ans=0;eir_skip=0;eir_vis=0;eir_score=0.0
-        for i,q in enumerate(eir_qs):
-            if q in pd_:
-                eir_vis+=1
-                if pd_[q].get("response","").strip():
-                    eir_ans+=1; ai_s=pd_[q].get("ai_score"); bs=eir_sc[i] if i<len(eir_sc) else base
-                    eir_score+=(ai_s*bs if ai_s is not None else bs)
-                else: eir_skip+=1
-        total_dim_all+=dim_ans; total_eir_all+=eir_ans
-        total_dim_sc+=dim_score; total_eir_sc+=eir_score
-
-        def fsc(s): return "—" if s==0 else f"{s:.2f}" if s>=1 else f"{s:.4f}"
-        def qa(a,sk,vi):
-            if vi==0: return "❌ Not Started"
-            if sk>0 and a>0: return f"⚠️ {a} Ans,{sk} Skip"
-            if sk>0: return f"⏭️ All {sk} Skipped"
-            return f"✅ {a}/9"
-        tot=dim_ans+eir_ans; pct=int((tot/18)*100) if (dim_vis+eir_vis)>0 else 0
-        ass=("🔴 Not Started" if (dim_vis+eir_vis)==0 else "🟡 In Progress" if pct<50 else "🟠 Partial" if pct<100 else "🟢 Complete")
-        phase_rows.append({"name":phase,"focus":focus,"pnum":pnum,
-            "dim_qa":qa(dim_ans,dim_skip,dim_vis),"eir_qa":qa(eir_ans,eir_skip,eir_vis),
-            "assess":ass,"dim_grade":fsc(dim_score),"eir_grade":fsc(eir_score)})
-
-    total_ans=total_dim_all+total_eir_all; total_max=len(phases)*18
-    overall_grade=round((total_ans/total_max)*10,1) if total_max and total_ans>0 else 0.0
-    ts=total_dim_sc+total_eir_sc
-    tsc="0.00" if ts==0 else f"{ts:.2f}" if ts>=1 else f"{ts:.4f}"
-
-    def mkt(rows_html, cols, headers):
-        cg="".join(f"<col style='width:{w};'/>" for w in cols)
-        h=f"<table style='width:100%;border-collapse:collapse;table-layout:fixed;'><colgroup>{cg}</colgroup><thead><tr>"
-        for hd in headers: h+=f"<th style='{TH}'>{hd}</th>"
-        h+="</tr></thead><tbody>"
-        for i,r in enumerate(rows_html):
-            bg="#0a0d2e" if i%2==0 else "rgba(109,40,217,0.07)"
-            h+=f"<tr style='background:{bg};'>{r}</tr>"
-        h+="</tbody></table>"
-        return h
-
-    pf=[]; di=[]; ei=[]
-    def qc(q): return "#86efac" if "✅" in q else "#fde68a" if "⚠️" in q else "#fca5a5" if "⏭️" in q else "#94a3b8"
-    def ac(a): return "#86efac" if "🟢" in a else "#fde68a" if "🟡" in a else "#f97316" if "🟠" in a else "#fca5a5"
-    for r in phase_rows:
-        pf.append(td(f"P{r['pnum']}: {r['name']}",color="#c4b5fd",bold=True,align="left")+td(r["focus"],color="#fbbf24",bold=True))
-        di.append(td(r["dim_qa"],color=qc(r["dim_qa"]))+td(r["dim_grade"],color="#f59e0b",bold=True)+td(r["assess"],color=ac(r["assess"])))
-        ei.append(td(r["eir_qa"],color=qc(r["eir_qa"]))+td(r["eir_grade"],color="#f59e0b",bold=True)+td(r["assess"],color=ac(r["assess"])))
-
-    title_suffix=f" — {target_phase}" if target_phase else ""
-    return f"""
-<div style='text-align:center;margin-bottom:12px;'>
-  <span style='font-family:Outfit,sans-serif;font-weight:900;font-size:1.25em;color:#f59e0b;letter-spacing:1px;'>
-    📊 Detailed Score Card{title_suffix}
-  </span>
-</div>
-<div style='display:grid;grid-template-columns:0.9fr 1fr 1fr;gap:8px;width:100%;box-sizing:border-box;'>
-  <div style='background:rgba(13,16,53,0.95);border:1px solid rgba(109,40,217,0.30);border-radius:10px;overflow:hidden;'>
-    <div style='background:#2d1b69;padding:8px 10px;font-family:Outfit,sans-serif;font-weight:800;font-size:0.85em;color:#c4b5fd;text-align:center;border-bottom:2px solid rgba(109,40,217,0.45);'>🎯 Phase / Focus</div>
-    {mkt(pf,["58%","42%"],["Phase","Focus"])}
-  </div>
-  <div style='background:rgba(13,16,53,0.95);border:1px solid rgba(245,158,11,0.30);border-radius:10px;overflow:hidden;'>
-    <div style='background:#2d1b69;padding:8px 10px;font-family:Outfit,sans-serif;font-weight:800;font-size:0.85em;color:#fbbf24;text-align:center;border-bottom:2px solid rgba(245,158,11,0.45);'>📐 Dimensions</div>
-    {mkt(di,["42%","22%","36%"],["Q&A Status","Grading","Assessment"])}
-  </div>
-  <div style='background:rgba(13,16,53,0.95);border:1px solid rgba(239,68,68,0.30);border-radius:10px;overflow:hidden;'>
-    <div style='background:#2d1b69;padding:8px 10px;font-family:Outfit,sans-serif;font-weight:800;font-size:0.85em;color:#fca5a5;text-align:center;border-bottom:2px solid rgba(239,68,68,0.50);'>🐘 Elephants in the Room</div>
-    {mkt(ei,["42%","22%","36%"],["Q&A Status","Grading","Assessment"])}
-  </div>
-</div>
-<div style='margin-top:10px;font-size:0.85em;color:#94a3b8;font-family:Sora,sans-serif;text-align:center;padding:8px;background:rgba(13,16,53,0.6);border-radius:8px;'>
-  <b style='color:#f59e0b;font-size:1.05em;'>Grade: {overall_grade}/10</b>
-  &nbsp;·&nbsp; Score: <b style='color:#f59e0b;'>{tsc}</b>
-  &nbsp;·&nbsp; Dim: {total_dim_all}/{len(phases)*9}
-  &nbsp;·&nbsp; EIR: {total_eir_all}/{len(phases)*9}
-</div>"""
-
-# (get_all_phase_scorecards removed)
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CERTIFICATE
-# ══════════════════════════════════════════════════════════════════
-def make_certificate(all_data, name, photo_path, ip_address):
+def make_certificate(all_data, name, uploaded_file):
     W,H=1500,960; img=Image.new("RGB",(W,H)); draw=ImageDraw.Draw(img)
     for y in range(H):
         t=y/H; draw.line([(0,y),(W,y)],fill=(int(6+12*t),int(8+8*t),int(24+22*t)))
-    rng=np.random.default_rng(42)
-    for _ in range(200):
-        sx,sy=int(rng.uniform(0,W)),int(rng.uniform(0,H)); alp=int(rng.uniform(60,190)); ss=rng.choice([1,1,2])
-        draw.ellipse([sx,sy,sx+ss,sy+ss],fill=(alp,alp,int(alp*0.9)))
-    for off,col,w in [(8,(109,40,217),2)]:
-        draw.rectangle([off,off,W-off,H-off],outline=col,width=w)
     try:
-        fp_b="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        fp_r="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-        f72=ImageFont.truetype(fp_b,72); f44=ImageFont.truetype(fp_b,44)
-        f32=ImageFont.truetype(fp_b,32); f24=ImageFont.truetype(fp_r,24); f14=ImageFont.truetype(fp_r,14)
+        f72=ImageFont.truetype("arial.ttf",72); f44=ImageFont.truetype("arial.ttf",44)
+        f32=ImageFont.truetype("arial.ttf",32); f24=ImageFont.truetype("arial.ttf",24)
     except:
-        f72=f44=f32=f24=f14=ImageFont.load_default()
-    cx=W//2
-    utc_now=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        f72=f44=f32=f24=ImageFont.load_default()
+        
+    cx=W//2; utc_now=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     draw.text((cx,62),"🦄  i2u.ai",fill=(245,158,11),font=f44,anchor="mm")
-    draw.text((cx,100),f"IP: {ip_address}  |  {utc_now}",fill=(100,116,139),font=f14,anchor="mm")
     draw.text((cx,130),"UNICORN FOUNDATIONAL ASSESSMENT",fill=(226,232,240),font=f32,anchor="mm")
-    draw.line([(120,160),(W-120,160)],fill=(245,158,11),width=2)
     draw.text((cx,200),"Certificate of Assessment Participation",fill=(148,163,184),font=f24,anchor="mm")
-    draw.text((cx,244),"This certifies that",fill=(100,116,139),font=f24,anchor="mm")
+    
     n=(name or "The Founder").strip()
-    draw.text((cx+2,350),n,fill=(92,40,0),font=f72,anchor="mm")
-    draw.text((cx,348),n,fill=(245,158,11),font=f72,anchor="mm")
-    nb=draw.textbbox((cx,348),n,font=f72,anchor="mm")
-    for lx in range(nb[0]-14,nb[2]+14):
-        a=max(0,1-abs(lx-cx)/((nb[2]-nb[0])/2+14))
-        draw.line([(lx,nb[3]+14),(lx,nb[3]+17)],fill=(int(245*a),int(158*a),0))
+    draw.text((cx,350),n,fill=(245,158,11),font=f72,anchor="mm")
+    
     ta=sum(len(v) for v in all_data.values()) if all_data else 0
     np_=len(all_data)
     draw.text((cx,430),"has completed the i2u.ai Unicorn Foundational Assessment",fill=(148,163,184),font=f24,anchor="mm")
     draw.text((cx,476),f"{np_} phases  ·  {ta} questions answered",fill=(167,139,250),font=f32,anchor="mm")
     draw.text((cx,560),datetime.now().strftime("%B %d, %Y"),fill=(100,116,139),font=f24,anchor="mm")
-    bx,by,br=cx,648,52
-    draw.ellipse([bx-br,by-br,bx+br,by+br],fill=(30,10,70),outline=(245,158,11),width=3)
-    draw.line([(110,H-90),(W-110,H-90)],fill=(20,30,60),width=1)
-    draw.text((cx,H-58),"Provisional Certificate  ·  Unicolt Quiz  ·  i2u.ai Confidential",fill=(40,55,90),font=f14,anchor="mm")
-    if photo_path:
+
+    if uploaded_file is not None:
         try:
-            ph=Image.open(photo_path).convert("RGBA").resize((210,210))
+            ph=Image.open(uploaded_file).convert("RGBA").resize((210,210))
             msk=Image.new("L",(210,210),0); ImageDraw.Draw(msk).ellipse([0,0,210,210],fill=255)
             circ=Image.new("RGBA",(210,210),0); circ.paste(ph,mask=msk)
             rgba=img.convert("RGBA"); px,py=W-255,48
             rgba.paste(circ,(px,py),circ)
-            d2=ImageDraw.Draw(rgba)
-            for ro,rc in [(0,(245,158,11)),(6,(109,40,217))]:
-                d2.ellipse([px-ro-4,py-ro-4,px+210+ro+4,py+210+ro+4],outline=rc,width=2)
             img=rgba.convert("RGB")
         except: pass
     return img
 
-
 # ══════════════════════════════════════════════════════════════════
-#  APP LOGIC
+#  SESSION STATE & CALLBACKS
 # ══════════════════════════════════════════════════════════════════
-def get_phase_num(phase_name):
-    try: return clean_phases.index(phase_name)+1
-    except: return 1
+if 'all_data' not in st.session_state: st.session_state.all_data = {}
+if 'current_phase' not in st.session_state: st.session_state.current_phase = None
+if 'q_index' not in st.session_state: st.session_state.q_index = 0
+if 'status_msg' not in st.session_state: st.session_state.status_msg = ""
+if 'ai_feedback' not in st.session_state: st.session_state.ai_feedback = ""
 
-def make_go_to_phase(pname, phase_num):
-    def _fn(all_data):
-        all_qs = get_all_qs(pname); first_q = all_qs[0] if all_qs else ""
-        pf = get_focus_for_phase(pname); label, focus = q_label(0, pf)
-        btn_style = ("background:rgba(109,40,217,0.18);border:1px solid rgba(109,40,217,0.45);"
-                     "border-radius:10px;color:#c4b5fd;font-family:Outfit,sans-serif;font-weight:700;"
-                     "font-size:0.85em;padding:8px 16px;cursor:pointer;margin-bottom:8px;text-transform:uppercase;")
-        logo_bar = (f"<div style='display:flex;align-items:center;justify-content:space-between;"
-                    f"padding:10px 20px;background:linear-gradient(90deg,rgba(13,16,53,0.98),rgba(7,8,26,0.92));"
-                    f"border-bottom:1px solid rgba(109,40,217,0.28);margin-bottom:8px;width:100%;box-sizing:border-box;'>"
-                    f"<div style='display:flex;flex-direction:column;align-items:center;gap:3px;'>"
-                    f"<img src='{LOGO_SRC}' style='width:44px;height:44px;border-radius:12px;object-fit:cover;'/>"
-                    f"<span style='font-family:Outfit,sans-serif;font-weight:900;font-size:0.85em;"
-                    f"background:linear-gradient(135deg,#f59e0b,#8b5cf6);-webkit-background-clip:text;"
-                    f"-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:1px;'>i2u.ai</span>"
-                    f"<span style='font-family:Sora,sans-serif;font-size:0.60em;color:#64748b;'>Unicolt Quiz</span>"
-                    f"</div>"
-                    f"<div style='display:flex;flex-direction:column;align-items:center;flex:1;padding:0 16px;'>"
-                    f"  <button onclick=\"document.getElementById('hidden-back-btn').click()\" style=\"{btn_style}\">"
-                    f"      🏠 UNICOLT QUIZ HOME</button>"
-                    f"</div>"
-                    f"<div style='font-family:Sora,sans-serif;font-size:0.90em;color:#f59e0b;font-weight:700;text-align:right;min-width:120px;'>"
-                    f"Focus: {pf}</div></div>")
-        
-        phase_title = f"<div class='phase-header-title'>👉 Phase {phase_num}: {pname}</div>"
-        combined_hdr = logo_bar + phase_title
-        
-        return (
-            gr.update(visible=False), gr.update(visible=True), # home, phase pages
-            pname, 0, # current_phase, q_index
-            first_q, f"{focus} {label}", # question_display, question_title
-            "Dimensions: Question 1 of 9", # progress
-            gr.update(value=""), gr.update(value=""), # response, save_status
-            gr.update(visible=False), gr.update(visible=False), # warnings
-            build_dim_radar(all_data, pname, phase_num, 0),
-            build_eir_radar(all_data, pname, phase_num, 0),
-            build_scorecard(all_data, None),
-            build_overall_metrics_html(all_data),
-            # Dashboard Outputs
-            build_phase_detail_table(all_data, pname, is_sticky=True),
-            build_phase_detail_table(all_data, pname, is_sticky=False),
-            gr.update(value="", visible=False), # ai_feedback_out
-            gr.update(value=combined_hdr),      # phase_header_html
-        )
-    return _fn
-
+def set_phase(phase_name):
+    st.session_state.current_phase = phase_name
+    st.session_state.q_index = 0
+    st.session_state.status_msg = ""
+    st.session_state.ai_feedback = ""
 
 def go_home():
-    return gr.update(visible=True), gr.update(visible=False)
+    st.session_state.current_phase = None
 
-def save_and_advance(phase, q_index, text, files, all_data):
-    import hashlib
-    all_qs=get_all_qs(phase); phase_num=get_phase_num(phase)
-    if not phase or not all_qs:
-        return (all_data, q_index, "⚠️ No phase loaded.",
-                gr.update(), gr.update(), gr.update(),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(visible=False))
-
-    current_q=all_qs[q_index]; phase_focus=get_focus_for_phase(phase); label,focus=q_label(q_index,phase_focus)
-    was_skipped=not (text and text.strip())
-    all_data.setdefault(phase,{})[current_q]={"response":text.strip() if text else "","skipped":was_skipped,"ai_score":None,"files":[f.name for f in files] if files else []}
-
+def save_and_advance():
+    phase = st.session_state.current_phase
+    idx = st.session_state.q_index
+    all_qs = get_all_qs(phase)
+    current_q = all_qs[idx]
+    
+    # Grab the text area value bound to session state
+    text_key = f"ans_{phase}_{idx}"
+    user_ans = st.session_state.get(text_key, "")
+    
+    phase_focus = get_focus_for_phase(phase)
+    label, focus = q_label(idx, phase_focus)
+    
+    was_skipped = not bool(user_ans and user_ans.strip())
+    
+    if phase not in st.session_state.all_data:
+        st.session_state.all_data[phase] = {}
+        
+    st.session_state.all_data[phase][current_q] = {
+        "response": user_ans.strip() if user_ans else "",
+        "skipped": was_skipped,
+        "ai_score": None
+    }
+    
     if was_skipped:
-        status_msg=f"⏭️ Skipped **{label}**."; skip_visible=True; ai_update=gr.update(value="",visible=False)
+        st.session_state.status_msg = f"⏭️ Skipped **{label}**."
+        st.session_state.ai_feedback = ""
     else:
-        status_msg=f"✅ Saved **{label}**."; skip_visible=False
-        ai_fb=llm_evaluate_answer(phase,phase_focus,label,current_q,text)
-        if ai_fb:
-            ai_sc=parse_ai_score(ai_fb)
-            if ai_sc is not None: all_data[phase][current_q]["ai_score"]=ai_sc
-            ai_update=gr.update(value=f"🤖 **AI Mentor Feedback:**\n\n{ai_fb}",visible=True)
-        else: ai_update=gr.update(value="",visible=False)
+        st.session_state.status_msg = f"✅ Saved **{label}**."
+        with st.spinner("AI Mentor is evaluating your answer..."):
+            ai_fb = llm_evaluate_answer(phase, phase_focus, label, current_q, user_ans)
+            if ai_fb:
+                ai_sc = parse_ai_score(ai_fb)
+                if ai_sc is not None:
+                    st.session_state.all_data[phase][current_q]["ai_score"] = ai_sc
+                st.session_state.ai_feedback = f"🤖 **AI Mentor Feedback:**\n\n{ai_fb}"
+            else:
+                st.session_state.ai_feedback = ""
+                
+    # Advance
+    if idx + 1 < len(all_qs):
+        st.session_state.q_index += 1
+    else:
+        st.session_state.status_msg = f"🏆 **{phase} complete!**"
 
-    next_idx=q_index+1
-    if next_idx==9 and not was_skipped:
-        dim_qs=get_dim_qs(phase); pd_=all_data.get(phase,{})
-        if sum(1 for q in dim_qs if q in pd_ and pd_[q].get("response","").strip())<9:
-            return (all_data, q_index, status_msg, gr.update(), gr.update(), gr.update(),
-                    gr.update(visible=True), gr.update(visible=skip_visible), gr.update(value=""),
-                    build_dim_radar(all_data,phase,phase_num,q_index),
-                    build_eir_radar(all_data,phase,phase_num,q_index),
-                    build_scorecard(all_data,None), build_overall_metrics_html(all_data),
-                    build_phase_detail_table(all_data, phase, True),
-                    build_phase_detail_table(all_data, phase, False), ai_update)
-
-    if next_idx>=len(all_qs):
-        return (all_data, q_index, f"🏆 **{phase} complete!**",
-                gr.update(value="✅ Complete!"), gr.update(value="✅ Phase Complete!"),
-                gr.update(value="🏆 Phase Complete!"), gr.update(visible=False), gr.update(visible=False), gr.update(value=""),
-                build_dim_radar(all_data,phase,phase_num,q_index),
-                build_eir_radar(all_data,phase,phase_num,q_index),
-                build_scorecard(all_data,None), build_overall_metrics_html(all_data),
-                build_phase_detail_table(all_data, phase, True),
-                build_phase_detail_table(all_data, phase, False), gr.update(value="",visible=False))
-
-    next_q=all_qs[next_idx]; nl,nf=q_label(next_idx,phase_focus); is_eir=next_idx>=9; li=(next_idx-9+1) if is_eir else (next_idx+1); sec="EIR" if is_eir else "Dimensions"
-    return (all_data, next_idx, status_msg,
-            gr.update(value=next_q), gr.update(value=f"{nf} {nl}"),
-            gr.update(value=f"{sec}: Q{li}/9"),
-            gr.update(visible=False), gr.update(visible=skip_visible), gr.update(value=""),
-            build_dim_radar(all_data,phase,phase_num,next_idx),
-            build_eir_radar(all_data,phase,phase_num,next_idx),
-            build_scorecard(all_data,None), build_overall_metrics_html(all_data),
-            build_phase_detail_table(all_data, phase, True),
-            build_phase_detail_table(all_data, phase, False), ai_update)
-
-def go_back(phase, q_index, all_data):
-    phase_num=get_phase_num(phase); all_qs=get_all_qs(phase); prev_idx=max(0,q_index-1); prev_q=all_qs[prev_idx]
-    bf=get_focus_for_phase(phase); pl,pf=q_label(prev_idx,bf); is_eir=prev_idx>=9; li=(prev_idx-9+1) if is_eir else (prev_idx+1); sec="EIR" if is_eir else "Dimensions"
-    pd_=all_data.get(phase,{}); prev_ans=pd_.get(prev_q,{}).get("response","") if prev_q in pd_ else ""
-    return (all_data, prev_idx, f"↩️ Back to {pl}.",
-            gr.update(value=prev_q), gr.update(value=f"{pf} {pl}"),
-            gr.update(value=f"{sec}: Q{li}/9"),
-            gr.update(visible=False), gr.update(visible=False), gr.update(value=prev_ans),
-            build_dim_radar(all_data,phase,phase_num,prev_idx),
-            build_eir_radar(all_data,phase,phase_num,prev_idx),
-            build_scorecard(all_data,None), build_overall_metrics_html(all_data),
-            build_phase_detail_table(all_data, phase, True),
-            build_phase_detail_table(all_data, phase, False), gr.update(value="",visible=False))
-
-def gen_cert(all_data, name, photo, request: gr.Request):
-    ip_addr=request.client.host if request and request.client else "Unknown IP"
-    path=photo if isinstance(photo,str) else (photo.name if photo else None)
-    return make_certificate(all_data, name or "", path, ip_addr)
-
-def try_go_to_eir(phase, all_data):
-    dim_qs=get_dim_qs(phase); pd_=all_data.get(phase,{}) if all_data else {}
-    dim_done=sum(1 for q in dim_qs if q in pd_ and pd_[q].get("response","").strip())
-    return gr.update(visible=(dim_done<9))
-
-def final_submit(all_data, founder_name):
-    ta=sum(len(v) for v in all_data.values()) if all_data else 0
-    if ta==0: return "⚠️ Please answer at least one question before submitting."
-    return llm_hitl_report(all_data, founder_name or "The Founder")
-
+def go_back():
+    if st.session_state.q_index > 0:
+        st.session_state.q_index -= 1
+        st.session_state.status_msg = "↩️ Went back to previous question."
+        st.session_state.ai_feedback = ""
 
 # ══════════════════════════════════════════════════════════════════
-#  THEME
+#  MAIN APP UI
 # ══════════════════════════════════════════════════════════════════
-theme = gr.themes.Base(
-    primary_hue=gr.themes.colors.violet, secondary_hue=gr.themes.colors.blue,
-    neutral_hue=gr.themes.colors.slate,
-    font=[gr.themes.GoogleFont("Sora"),"system-ui"],
-    font_mono=[gr.themes.GoogleFont("JetBrains Mono"),"monospace"],
-    radius_size=gr.themes.sizes.radius_lg, spacing_size=gr.themes.sizes.spacing_md,
-).set(
-    background_fill_primary="#07081a", background_fill_secondary="#0d1035",
-    block_background_fill="#0d1035", block_border_color="rgba(109,40,217,0.28)",
-    block_border_width="1px", block_shadow="0 0 32px rgba(109,40,217,0.12)",
-    body_text_color="#e2e8f0", body_text_color_subdued="#64748b",
-    block_label_text_color="#94a3b8",
-    button_primary_background_fill="linear-gradient(135deg,#f59e0b,#d97706)",
-    button_primary_background_fill_hover="linear-gradient(135deg,#fbbf24,#f59e0b)",
-    button_primary_text_color="#07081a", button_primary_border_color="#f59e0b",
-    button_secondary_background_fill="rgba(109,40,217,0.14)",
-    button_secondary_background_fill_hover="rgba(109,40,217,0.26)",
-    button_secondary_text_color="#c4b5fd", button_secondary_border_color="rgba(109,40,217,0.42)",
-    input_background_fill="#0a0c25", input_border_color="rgba(109,40,217,0.40)",
-    input_border_color_focus="#f59e0b", input_placeholder_color="#475569",
-)
+
+# Header
+col1, col2, col3 = st.columns([1,2,1])
+with col2:
+    st.markdown(f"""
+    <div style='text-align: center;'>
+        <img src='{LOGO_SRC}' width='80' style='border-radius:15px; box-shadow: 0 4px 8px rgba(245,158,11,0.5); margin-bottom: 10px;'/>
+        <h2 style='margin:0; background: linear-gradient(135deg, #f59e0b, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>i2u.ai Unicolt Quiz</h2>
+        <p style='color: #94a3b8; font-size: 14px;'>Ideas to Unicorns · AI-Powered Assessment</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════════════════════════
-#  UI
-# ══════════════════════════════════════════════════════════════════
-with gr.Blocks(title="i2u.ai — Unicolt Quiz") as demo:
-
-    saved_data    = gr.State({})
-    current_phase = gr.State("")
-    q_index_state = gr.State(0)
-
-    hidden_back_btn = gr.Button("🏠 Unicolt Quiz Home", elem_id="hidden-back-btn", elem_classes=["hidden-btn"])
-
-    LOGO_HTML = f"""
-    <div class="logo-header">
-      <img src="{LOGO_SRC}" alt="i2u.ai logo"
-           style="width:72px;height:72px;max-width:72px;max-height:72px;
-                  border-radius:18px;object-fit:cover;display:block;margin:0 auto 10px auto;"/>
-      <div class="brand-name">i2u.ai</div>
-      <div class="tagline">Ideas to Unicorns &nbsp;·&nbsp; AI-Powered Unicolt Quiz</div>
-    </div>"""
-
+if st.session_state.current_phase is None:
     # ── PAGE 1: HOME ─────────────────────────────────────────────
-    with gr.Group(visible=True) as home_page:
-        gr.HTML(LOGO_HTML)
-        gr.Markdown("### Select Your Assessment Phase", elem_classes=["c"])
-        phase_buttons = []
-        rows = [clean_phases[i:i+3] for i in range(0, len(clean_phases), 3)]
-        for row_idx, row_phases in enumerate(rows):
-            with gr.Row(equal_height=True):
-                for col_idx, name in enumerate(row_phases):
-                    emoji = get_emoji(name); phase_num = row_idx*3+col_idx+1
-                    card_label = f"Phase{phase_num}: {emoji}  {name}"
-                    with gr.Column(scale=1, min_width=210):
-                        btn = gr.Button(card_label, variant="secondary", elem_classes=["phase-btn"])
-                        phase_buttons.append((btn, name, phase_num))
-        gr.Markdown("---\n_© i2u.ai — All submissions are private and confidential._",
-                    elem_classes=["footer-md"])
+    st.markdown("<h3 style='text-align: center; color: white;'>Select Your Assessment Phase</h3>", unsafe_allow_html=True)
+    st.write("")
+    
+    cols = st.columns(3)
+    for i, phase_name in enumerate(clean_phases):
+        col = cols[i % 3]
+        emoji = get_emoji(phase_name)
+        phase_num = i + 1
+        with col:
+            # We use an HTML div for styling, but need a Streamlit button to handle the click
+            st.markdown(f"<div class='phase-card'><h4>Phase {phase_num}</h4><h2>{emoji} {phase_name}</h2></div>", unsafe_allow_html=True)
+            if st.button(f"Enter {phase_name}", key=f"btn_{phase_name}", use_container_width=True):
+                set_phase(phase_name)
+                st.rerun()
 
+else:
     # ── PAGE 2: WORKSPACE ────────────────────────────────────────
-    # ── PAGE 2: WORKSPACE ────────────────────────────────────────
-    with gr.Group(visible=False) as phase_page:
+    phase = st.session_state.current_phase
+    idx = st.session_state.q_index
+    phase_num = clean_phases.index(phase) + 1 if phase in clean_phases else 1
+    focus = get_focus_for_phase(phase)
+    all_qs = get_all_qs(phase)
+    is_complete = idx >= len(all_qs)
+    current_q = all_qs[idx] if not is_complete else ""
+    label, _ = q_label(idx, focus) if not is_complete else ("", "")
+    
+    # ── SIDEBAR ──────────────────────────────────────────────────
+    with st.sidebar:
+        if st.button("🏠 Home", use_container_width=True):
+            go_home()
+            st.rerun()
+            
+        st.markdown(f"### 📊 Phase {phase_num}: {phase}")
+        st.markdown(f"**Focus:** <span style='color:#f59e0b;'>{focus}</span>", unsafe_allow_html=True)
+        st.markdown("---")
+        
+        # Radars
+        fig_dim = build_dim_radar(st.session_state.all_data, phase, phase_num)
+        st.pyplot(fig_dim)
+        
+        fig_eir = build_eir_radar(st.session_state.all_data, phase, phase_num)
+        st.pyplot(fig_eir)
+        
+        st.markdown("---")
+        # Sticky detail table
+        st.markdown(build_phase_detail_table(st.session_state.all_data, phase), unsafe_allow_html=True)
 
-        scorecard_sticky = gr.HTML(elem_classes=["sticky-score-container"])
-        phase_header_html = gr.HTML(elem_classes=["phase-hd"])
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                dim_radar_out = gr.Plot(label=None, show_label=False)
-            with gr.Column(scale=1):
-                eir_radar_out = gr.Plot(label=None, show_label=False)
+    # ── MAIN CONTENT ─────────────────────────────────────────────
+    if st.session_state.status_msg:
+        st.info(st.session_state.status_msg)
+        
+    if not is_complete:
+        progress_val = min(idx / 18.0, 1.0)
+        st.progress(progress_val)
+        section = "Dimensions" if idx < 9 else "Elephants in the Room"
+        st.caption(f"{section}: Question {idx+1} of 18")
+        
+        # Question Display
+        st.markdown(f"<h3 style='color:#f59e0b; text-align:center;'>{focus} {label}</h3>", unsafe_allow_html=True)
+        st.info(f"**{current_q}**")
+        
+        # Text Area
+        text_key = f"ans_{phase}_{idx}"
+        # Pre-fill if already answered
+        existing_ans = st.session_state.all_data.get(phase, {}).get(current_q, {}).get("response", "")
+        
+        st.text_area("Your Response:", value=existing_ans, key=text_key, height=150, placeholder="Type your answer or leave blank to skip...")
+        
+        col_btn1, col_btn2 = st.columns([1, 4])
+        with col_btn1:
+            if st.button("← Go Back", disabled=(idx == 0)):
+                go_back()
+                st.rerun()
+        with col_btn2:
+            if st.button("💾 Save & Next", type="primary"):
+                save_and_advance()
+                st.rerun()
+                
+        if st.session_state.ai_feedback:
+            st.markdown(f"<div class='hitl-block'>{st.session_state.ai_feedback}</div>", unsafe_allow_html=True)
+            
+    else:
+        st.success(f"🎉 You have completed all questions for Phase {phase_num}: {phase}!")
+        if st.button("← Back to Question 18"):
+            st.session_state.q_index = 17
+            st.rerun()
 
-        with gr.Row():
-            with gr.Column(scale=5):
-                progress_md       = gr.Markdown("Dimensions: Question 1 of 9", elem_classes=["c"])
-                eir_nav_btn       = gr.Button("🐘 Elephants in the Room", variant="secondary", size="sm")
-                question_title_md = gr.Markdown("**Resilience D1**", elem_classes=["question-title","c"])
-                question_display  = gr.Markdown("_Select a phase to load questions._",
-                                                elem_classes=["question-display"])
-                skip_warning = gr.Markdown("⏭️ **You skipped this question.**",
-                                           elem_classes=["skip-warning"], visible=False)
-                user_response = gr.Textbox(label="Your Response", lines=4, max_lines=7,
-                                            placeholder="Enter your response here...",
-                                            elem_classes=["response-box"])
-                user_files = gr.File(file_count="multiple", show_label=False)
-                with gr.Row():
-                    go_back_btn = gr.Button("← Improve / Go Back", variant="secondary", size="sm")
-                    save_btn    = gr.Button("💾  Save & Next", variant="primary", size="lg")
-                save_status     = gr.Markdown(elem_classes=["save-st"])
-                ai_feedback_out = gr.Markdown(value="", elem_classes=["hitl-block"], visible=False)
-
-            with gr.Column(scale=4):
-                eir_warning = gr.Markdown("🔴 **Complete all 9 Dimensions questions first.**",
-                                          elem_classes=["eir-warning"], visible=False)
-                with gr.Tabs():
-                    with gr.TabItem("🎓 Certificate & Submit"):
-                        founder_name  = gr.Textbox(label="Your Full Name")
-                        founder_photo = gr.Image(label="Upload Photo", type="filepath", height=150)
-                        gen_btn  = gr.Button("🎨 Generate Preview", variant="primary", size="lg")
-                        cert_img = gr.Image(label="", height=250)
-                        submit_btn = gr.Button("✅ Confirm & Submit", variant="primary", size="lg")
-                        submit_status = gr.Markdown()
-
-                    with gr.TabItem("🌟 Overall Metrics"):
-                        overall_metrics_out = gr.HTML(build_overall_metrics_html({}))
+    st.markdown("---")
+    
+    # ── TABS ─────────────────────────────────────────────────────
+    tab1, tab2, tab3 = st.tabs(["🎓 Certificate & HITL", "🌟 Overall Metrics", "🏆 Dashboard"])
+    
+    with tab1:
+        st.markdown("### Generate Provisional Certificate")
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            f_name = st.text_input("Your Full Name")
+            f_photo = st.file_uploader("Upload Photo (Optional)", type=["png", "jpg", "jpeg"])
+            if st.button("🎨 Generate Preview", type="primary"):
+                if "all_data" in st.session_state:
+                    cert_img = make_certificate(st.session_state.all_data, f_name, f_photo)
+                    st.image(cert_img, use_container_width=True)
+                
+        with c2:
+            st.markdown("### Human in the Loop (HITL) Report")
+            if st.button("✅ Generate AI HITL Report"):
+                with st.spinner("Compiling comprehensive report..."):
+                    report = llm_hitl_report(st.session_state.all_data, f_name)
+                    st.markdown(f"<div class='hitl-block'>{report}</div>", unsafe_allow_html=True)
                     
-                    with gr.TabItem("🏆 All Phases"):
-                        global_scorecard_out = gr.HTML(build_scorecard({}, target_phase=None))
-
-        gr.Markdown("---")
-        # Redesigned core section: Dashboard Grade Layout
-        scorecard_inline = gr.HTML()
-
-        gr.Markdown("---")
-        gr.Markdown("### 👤 Human in the Loop Report (HITL)", elem_classes=["hitl-block"])
-
-    # ── WIRING ────────────────────────────────────────────────────
-    PHASE_OUTS = [
-        home_page, phase_page,
-        current_phase, q_index_state,
-        question_display, question_title_md, progress_md,
-        user_response, save_status,
-        eir_warning, skip_warning,
-        dim_radar_out, eir_radar_out,
-        global_scorecard_out,
-        overall_metrics_out,
-        # Redesigned Dashboard outputs
-        scorecard_sticky,
-        scorecard_inline,
-        ai_feedback_out,
-        phase_header_html,
-    ]
-
-    SAVE_OUTS = [
-        saved_data, q_index_state, save_status,
-        question_display, question_title_md, progress_md,
-        eir_warning, skip_warning, user_response,
-        dim_radar_out, eir_radar_out,
-        global_scorecard_out,
-        overall_metrics_out,
-        # Redesigned Dashboard outputs
-        scorecard_sticky,
-        scorecard_inline,
-        ai_feedback_out,
-    ]
-
-    for btn, name, num in phase_buttons:
-        btn.click(fn=make_go_to_phase(name, num), inputs=[saved_data], outputs=PHASE_OUTS)
-
-    hidden_back_btn.click(fn=go_home, inputs=[], outputs=[home_page, phase_page])
-
-    save_btn.click(fn=save_and_advance,
-                   inputs=[current_phase, q_index_state, user_response, user_files, saved_data],
-                   outputs=SAVE_OUTS)
-
-    go_back_btn.click(fn=go_back,
-                      inputs=[current_phase, q_index_state, saved_data],
-                      outputs=SAVE_OUTS)
-
-    eir_nav_btn.click(fn=try_go_to_eir, inputs=[current_phase, saved_data], outputs=[eir_warning])
-
-    gen_btn.click(fn=gen_cert, inputs=[saved_data, founder_name, founder_photo], outputs=[cert_img])
-
-    submit_btn.click(fn=final_submit, inputs=[saved_data, founder_name], outputs=[submit_status])
-
-if __name__ == "__main__":
-    demo.launch(theme=theme, css=CSS, share=True)
+    with tab2:
+        st.markdown(build_overall_metrics_html(st.session_state.all_data), unsafe_allow_html=True)
+        
+    with tab3:
+        st.markdown(build_phase_detail_table(st.session_state.all_data, phase), unsafe_allow_html=True)
